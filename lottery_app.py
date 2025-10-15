@@ -17,13 +17,15 @@ st.set_page_config(
 
 class LotteryDataExporterStreamlit:
     def __init__(self):
-        # 固定数据库配置（不再由用户输入）
+        # 改进的数据库配置
         self.db_config = {
-            'host': 'localhost',
+            'host': 'localhost',  # 改为localhost
             'user': 'zf',
             'password': '117225982',
             'database': 'lottery',
-            'charset': 'utf8mb4'
+            'charset': 'utf8mb4',
+            'port': 3306,  # 明确指定端口
+            'connect_timeout': 10,  # 添加连接超时
         }
         
         # 列名映射
@@ -62,13 +64,31 @@ class LotteryDataExporterStreamlit:
             st.session_state.last_query_success = False
         if 'log_messages' not in st.session_state:
             st.session_state.log_messages = []
+        if 'db_connected' not in st.session_state:
+            st.session_state.db_connected = False
     
     def hash_password(self, password):
         """对密码进行哈希处理"""
         return hashlib.sha256(password.encode()).hexdigest()
     
+    def test_db_connection(self):
+        """测试数据库连接"""
+        try:
+            connection = pymysql.connect(**self.db_config)
+            connection.close()
+            st.session_state.db_connected = True
+            return True
+        except Exception as e:
+            st.session_state.db_connected = False
+            return False
+    
     def verify_user(self, username, password):
         """验证用户登录信息"""
+        # 先测试数据库连接
+        if not self.test_db_connection():
+            st.error("无法连接到数据库，请检查数据库服务是否启动")
+            return False
+            
         try:
             connection = pymysql.connect(**self.db_config)
             cursor = connection.cursor()
@@ -87,13 +107,29 @@ class LotteryDataExporterStreamlit:
                 return False
                 
         except Exception as e:
-            st.error(f"登录验证失败: {e}")
+            st.error(f"登录验证失败: {str(e)}")
             return False
     
     def setup_login_ui(self):
         """设置登录界面"""
-        st.title("🎫 彩票数据导出系统")
+        st.title("🎫 彩票数据导出系统V1.0")
         st.markdown("---")
+        
+        # 数据库连接状态
+        if not st.session_state.db_connected:
+            st.warning("⚠️ 数据库未连接，请检查:")
+            st.info("""
+            1. MySQL服务是否启动
+            2. 数据库配置是否正确
+            3. 网络连接是否正常
+            """)
+            
+            if st.button("🔄 重新测试数据库连接"):
+                if self.test_db_connection():
+                    st.success("✅ 数据库连接成功！")
+                    st.rerun()
+                else:
+                    st.error("❌ 数据库连接失败")
         
         # 登录表单
         with st.form("login_form"):
@@ -147,13 +183,23 @@ class LotteryDataExporterStreamlit:
             
             st.markdown("---")
             st.header("⚙️ 系统配置")
+            
+            # 数据库连接状态显示
+            if st.session_state.db_connected:
+                st.success("✅ 数据库已连接")
+            else:
+                st.error("❌ 数据库未连接")
+            
             st.info(f"数据库: {self.db_config['database']}")
             st.info(f"数据表: {self.table_name}")
             
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🔗 测试连接", use_container_width=True):
-                    self.test_connection()
+                    if self.test_db_connection():
+                        st.success("✅ 数据库连接成功！")
+                    else:
+                        st.error("❌ 数据库连接失败")
             with col2:
                 if st.button("🔄 刷新数据", use_container_width=True):
                     self.refresh_data_lists()
@@ -189,6 +235,10 @@ class LotteryDataExporterStreamlit:
     def refresh_data_lists(self):
         """刷新玩法和单位列表"""
         try:
+            if not self.test_db_connection():
+                st.sidebar.error("❌ 数据库未连接，无法刷新数据")
+                return
+                
             self.fetch_play_methods_from_db()
             self.fetch_regions_from_db()
             st.sidebar.success("✅ 数据列表刷新成功")
@@ -541,20 +591,13 @@ class LotteryDataExporterStreamlit:
             st.error(f"导出CSV失败: {e}")
             self.log_message(f"导出CSV失败: {e}")
     
-    def test_connection(self):
-        """测试数据库连接"""
-        try:
-            connection = pymysql.connect(**self.db_config)
-            connection.close()
-            st.sidebar.success("✅ 数据库连接成功！")
-            self.log_message("数据库连接测试成功")
-        except Exception as e:
-            st.sidebar.error(f"❌ 数据库连接失败: {e}")
-            self.log_message(f"数据库连接失败: {e}")
-    
     def fetch_regions_from_db(self):
         """从数据库获取兑奖单位列表"""
         try:
+            if not self.test_db_connection():
+                st.error("❌ 数据库未连接")
+                return
+                
             connection = pymysql.connect(**self.db_config)
             
             cursor = connection.cursor()
@@ -575,6 +618,10 @@ class LotteryDataExporterStreamlit:
     def fetch_play_methods_from_db(self):
         """从数据库获取玩法列表"""
         try:
+            if not self.test_db_connection():
+                st.error("❌ 数据库未连接")
+                return
+                
             connection = pymysql.connect(**self.db_config)
             
             cursor = connection.cursor()
@@ -684,6 +731,11 @@ class LotteryDataExporterStreamlit:
     def preview_data_func(self):
         """预览数据"""
         try:
+            # 检查数据库连接
+            if not self.test_db_connection():
+                st.error("❌ 数据库未连接，请检查数据库服务")
+                return
+                
             conditions = self.get_conditions()
             
             self.log_message("开始查询数据...")
