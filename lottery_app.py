@@ -20,8 +20,8 @@ class LotteryDataExporterStreamlit:
         # 固定数据库配置（不再由用户输入）
         self.db_config = {
             'host': 'localhost',
-            'user': 'your_db_user',
-            'password': 'your_db_password',
+            'user': 'zf',
+            'password': '117225982',
             'database': 'lottery',
             'charset': 'utf8mb4'
         }
