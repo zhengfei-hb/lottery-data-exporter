@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import logging
 import io
 import time
+import hashlib
 
 # 设置页面配置
 st.set_page_config(
@@ -16,11 +17,11 @@ st.set_page_config(
 
 class LotteryDataExporterStreamlit:
     def __init__(self):
-        # 数据库配置
+        # 固定数据库配置（不再由用户输入）
         self.db_config = {
             'host': 'localhost',
-            'user': '',
-            'password': '',
+            'user': 'your_db_user',
+            'password': 'your_db_password',
             'database': 'lottery',
             'charset': 'utf8mb4'
         }
@@ -36,12 +37,17 @@ class LotteryDataExporterStreamlit:
         }
         
         self.table_name = "各奖等中奖明细表"
+        self.user_table = "users"  # 用户表名
         
         # 初始化 session state
         self.init_session_state()
     
     def init_session_state(self):
         """初始化 session state"""
+        if 'authenticated' not in st.session_state:
+            st.session_state.authenticated = False
+        if 'username' not in st.session_state:
+            st.session_state.username = None
         if 'selected_play_methods' not in st.session_state:
             st.session_state.selected_play_methods = []
         if 'prize_conditions' not in st.session_state:
@@ -57,53 +63,100 @@ class LotteryDataExporterStreamlit:
         if 'log_messages' not in st.session_state:
             st.session_state.log_messages = []
     
-    def log_message(self, message):
-        """记录日志消息"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_entry = f"[{timestamp}] {message}"
-        st.session_state.log_messages.append(log_entry)
-        # 保持日志数量在合理范围内
-        if len(st.session_state.log_messages) > 100:
-            st.session_state.log_messages = st.session_state.log_messages[-50:]
+    def hash_password(self, password):
+        """对密码进行哈希处理"""
+        return hashlib.sha256(password.encode()).hexdigest()
     
-    def setup_ui(self):
-        """设置用户界面"""
-        st.title("🎫 彩票数据导出工具")
-        
-        # 侧边栏 - 数据库配置
-        with st.sidebar:
-            st.header("⚙️ 数据库配置")
+    def verify_user(self, username, password):
+        """验证用户登录信息"""
+        try:
+            connection = pymysql.connect(**self.db_config)
+            cursor = connection.cursor()
             
-            self.db_config['host'] = st.text_input(
-                "主机", 
-                value=self.db_config['host'],
-                help="数据库服务器地址"
-            )
-            self.db_config['user'] = st.text_input(
-                "用户名", 
-                value=self.db_config['user']
-            )
-            self.db_config['password'] = st.text_input(
-                "密码", 
-                value=self.db_config['password'], 
-                type="password"
-            )
-            self.db_config['database'] = st.text_input(
-                "数据库", 
-                value=self.db_config['database']
-            )
-            self.table_name = st.text_input(
-                "表名", 
-                value=self.table_name
-            )
+            # 查询用户表验证用户名和密码
+            hashed_password = self.hash_password(password)
+            query = f"SELECT * FROM {self.user_table} WHERE username = %s AND password = %s"
+            cursor.execute(query, (username, hashed_password))
+            user = cursor.fetchone()
+            
+            connection.close()
+            
+            if user:
+                return True
+            else:
+                return False
+                
+        except Exception as e:
+            st.error(f"登录验证失败: {e}")
+            return False
+    
+    def setup_login_ui(self):
+        """设置登录界面"""
+        st.title("🎫 彩票数据导出系统")
+        st.markdown("---")
+        
+        # 登录表单
+        with st.form("login_form"):
+            st.subheader("用户登录")
+            
+            username = st.text_input("用户名", placeholder="请输入用户名")
+            password = st.text_input("密码", type="password", placeholder="请输入密码")
+            
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                login_button = st.form_submit_button("🚪 登录", use_container_width=True)
+            
+            if login_button:
+                if not username or not password:
+                    st.error("请输入用户名和密码")
+                else:
+                    with st.spinner("正在验证用户信息..."):
+                        if self.verify_user(username, password):
+                            st.session_state.authenticated = True
+                            st.session_state.username = username
+                            st.success(f"欢迎 {username}！")
+                            self.log_message(f"用户 {username} 登录成功")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("用户名或密码错误")
+                            self.log_message(f"登录失败 - 用户名: {username}")
+    
+    def setup_main_ui(self):
+        """设置主界面（查询页面）"""
+        # 顶部导航栏
+        col1, col2, col3 = st.columns([3, 1, 1])
+        with col1:
+            st.title("🎫 彩票数据导出工具")
+        with col2:
+            st.write(f"**欢迎, {st.session_state.username}**")
+        with col3:
+            if st.button("🚪 退出登录"):
+                st.session_state.authenticated = False
+                st.session_state.username = None
+                st.session_state.log_messages.clear()
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # 侧边栏 - 系统信息
+        with st.sidebar:
+            st.header("👤 用户信息")
+            st.write(f"用户名: {st.session_state.username}")
+            st.write(f"登录时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            st.markdown("---")
+            st.header("⚙️ 系统配置")
+            st.info(f"数据库: {self.db_config['database']}")
+            st.info(f"数据表: {self.table_name}")
             
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🔗 测试连接", use_container_width=True):
                     self.test_connection()
             with col2:
-                if st.button("🔄 重置配置", use_container_width=True):
-                    self.reset_db_config()
+                if st.button("🔄 刷新数据", use_container_width=True):
+                    self.refresh_data_lists()
             
             st.markdown("---")
             st.header("📊 快速操作")
@@ -132,6 +185,22 @@ class LotteryDataExporterStreamlit:
         
         with tab4:
             self.setup_log_ui()
+    
+    def refresh_data_lists(self):
+        """刷新玩法和单位列表"""
+        try:
+            self.fetch_play_methods_from_db()
+            self.fetch_regions_from_db()
+            st.sidebar.success("✅ 数据列表刷新成功")
+        except Exception as e:
+            st.sidebar.error(f"刷新失败: {e}")
+    
+    def setup_ui(self):
+        """设置用户界面"""
+        if not st.session_state.authenticated:
+            self.setup_login_ui()
+        else:
+            self.setup_main_ui()
     
     def setup_filter_ui(self):
         """设置筛选条件界面"""
@@ -475,7 +544,6 @@ class LotteryDataExporterStreamlit:
     def test_connection(self):
         """测试数据库连接"""
         try:
-            self.update_db_config()
             connection = pymysql.connect(**self.db_config)
             connection.close()
             st.sidebar.success("✅ 数据库连接成功！")
@@ -484,24 +552,9 @@ class LotteryDataExporterStreamlit:
             st.sidebar.error(f"❌ 数据库连接失败: {e}")
             self.log_message(f"数据库连接失败: {e}")
     
-    def reset_db_config(self):
-        """重置数据库配置"""
-        self.db_config = {
-            'host': 'localhost',
-            'user': '',
-            'password': '',
-            'database': 'lottery',
-            'charset': 'utf8mb4'
-        }
-        self.table_name = "各奖等中奖明细表"
-        st.sidebar.success("✅ 数据库配置已重置")
-        self.log_message("数据库配置已重置")
-        st.rerun()
-    
     def fetch_regions_from_db(self):
         """从数据库获取兑奖单位列表"""
         try:
-            self.update_db_config()
             connection = pymysql.connect(**self.db_config)
             
             cursor = connection.cursor()
@@ -522,7 +575,6 @@ class LotteryDataExporterStreamlit:
     def fetch_play_methods_from_db(self):
         """从数据库获取玩法列表"""
         try:
-            self.update_db_config()
             connection = pymysql.connect(**self.db_config)
             
             cursor = connection.cursor()
@@ -539,11 +591,6 @@ class LotteryDataExporterStreamlit:
         except Exception as e:
             st.error(f"❌ 从数据库获取玩法列表失败: {e}")
             self.log_message(f"从数据库获取玩法列表失败: {e}")
-    
-    def update_db_config(self):
-        """更新数据库配置（从UI获取当前值）"""
-        # 配置已经在UI中实时更新了
-        pass
     
     def get_conditions(self):
         """获取筛选条件"""
@@ -637,7 +684,6 @@ class LotteryDataExporterStreamlit:
     def preview_data_func(self):
         """预览数据"""
         try:
-            self.update_db_config()
             conditions = self.get_conditions()
             
             self.log_message("开始查询数据...")
@@ -755,6 +801,16 @@ class LotteryDataExporterStreamlit:
                 st.dataframe(play_method_counts, use_container_width=True)
         else:
             st.warning("暂无数据可统计")
+    
+    def log_message(self, message):
+        """记录日志消息"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        username = st.session_state.username if st.session_state.username else "未登录用户"
+        log_entry = f"[{timestamp}] [{username}] {message}"
+        st.session_state.log_messages.append(log_entry)
+        # 保持日志数量在合理范围内
+        if len(st.session_state.log_messages) > 100:
+            st.session_state.log_messages = st.session_state.log_messages[-50:]
     
     # 时间设置方法
     def set_today(self):
