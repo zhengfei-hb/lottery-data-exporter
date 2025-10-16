@@ -464,17 +464,6 @@ class LotteryDataExporterStreamlit:
                 
                 st.dataframe(display_data, use_container_width=True)
                 
-                # 数据统计信息
-                with st.expander("📊 数据统计信息"):
-                    st.write("**数据类型:**")
-                    st.write(st.session_state.preview_data.dtypes)
-                    
-                    st.write("**基本统计:**")
-                    numeric_cols = st.session_state.preview_data.select_dtypes(include=['number']).columns
-                    if len(numeric_cols) > 0:
-                        st.write(st.session_state.preview_data[numeric_cols].describe())
-                    else:
-                        st.write("没有数值列可统计")
             else:
                 st.warning("⚠️ 没有找到符合条件的数据")
                 st.info("请调整筛选条件后重新查询")
@@ -857,11 +846,6 @@ class LotteryDataExporterStreamlit:
             with col3:
                 st.metric("数据类型", f"{len(st.session_state.preview_data.select_dtypes(include=['number']).columns)} 数值列")
             
-            # 各玩法数量统计
-            if self.column_mapping['play_method'] in st.session_state.preview_data.columns:
-                play_method_counts = st.session_state.preview_data[self.column_mapping['play_method']].value_counts()
-                st.write("**各玩法记录数量:**")
-                st.dataframe(play_method_counts, use_container_width=True)
         else:
             st.warning("暂无数据可统计")
     
