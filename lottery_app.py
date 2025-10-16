@@ -32,6 +32,7 @@ class LotteryDataExporterStreamlit:
         self.column_mapping = {
             'region': '兑奖单位',
             'play_method': '方案名称',
+            'sale_site': '售出站点',
             'redeem_site': '兑奖站点',
             'prize_level': '兑奖金额',
             'redeem_time': '兑奖时间',
@@ -683,6 +684,7 @@ class LotteryDataExporterStreamlit:
         
         # 使用正确的列名映射
         region_col = self.column_mapping['region']
+        sale_site_col = self.column_mapping['sale_site']
         redeem_site_col = self.column_mapping['redeem_site']
         play_method_col = self.column_mapping['play_method']
         prize_level_col = self.column_mapping['prize_level']
@@ -924,9 +926,20 @@ class LotteryDataExporterStreamlit:
         st.rerun()
 
 # 运行应用
+# 在 main() 函数中添加网络配置
 def main():
+    # 添加网络配置（在应用启动前）
+    import socket
+    from streamlit.web.cli import _main_run
+    
     app = LotteryDataExporterStreamlit()
     app.setup_ui()
 
 if __name__ == "__main__":
+    # 设置Streamlit配置
+    import os
+    os.environ['STREAMLIT_SERVER_ADDRESS'] = '0.0.0.0'  # 允许所有IP访问
+    os.environ['STREAMLIT_SERVER_PORT'] = '8501'        # 设置端口
+    os.environ['STREAMLIT_SERVER_HEADLESS'] = 'true'    # 无头模式
+    
     main()
