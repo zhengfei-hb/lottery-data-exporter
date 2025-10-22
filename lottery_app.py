@@ -104,7 +104,11 @@ class LotteryDataExporterStreamlit:
                         try:
                             return datetime.strptime(latest_date, '%Y/%m/%d').date()
                         except:
-                            return None
+                            # 尝试其他可能的格式
+                            try:
+                                return datetime.strptime(latest_date.split()[0], '%Y-%m-%d').date()
+                            except:
+                                return None
                 else:
                     return latest_date
             return None
@@ -146,12 +150,19 @@ class LotteryDataExporterStreamlit:
             
             if user:
                 # 登录成功后获取最新数据日期
-                st.session_state.data_update_date = self.get_latest_redeem_date()
+                latest_date = self.get_latest_redeem_date()
+                if latest_date:
+                    st.session_state.data_update_date = latest_date
+                    self.log_message(f"获取到最新数据日期: {latest_date}")
+                else:
+                    st.session_state.data_update_date = None
+                    self.log_message("未获取到数据更新日期")
                 return True
             else:
                 return False
                 
         except Exception as e:
+            self.log_message(f"用户验证失败: {e}")
             return False
     
     def setup_login_ui(self):
@@ -191,10 +202,10 @@ class LotteryDataExporterStreamlit:
         col1, col2, col3 = st.columns([3, 1, 1])
         with col1:
             # 显示标题和数据更新日期
-            title_text = "🎫 即开票兑奖数据导出V1.0.1"
             if st.session_state.data_update_date:
-                title_text += f" (数据更新至: {st.session_state.data_update_date})"
-            st.title(title_text)
+                st.title(f"🎫 即开票兑奖数据导出V1.0.1 (数据更新至: {st.session_state.data_update_date})")
+            else:
+                st.title("🎫 即开票兑奖数据导出V1.0.1")
         with col2:
             st.write(f"**欢迎, {st.session_state.username}**")
         with col3:
@@ -216,6 +227,8 @@ class LotteryDataExporterStreamlit:
             # 显示数据更新日期
             if st.session_state.data_update_date:
                 st.write(f"数据更新至: **{st.session_state.data_update_date}**")
+            else:
+                st.write("数据更新至: **未知**")
             
             st.markdown("---")
             st.header("⚙️ 系统配置")
@@ -287,12 +300,18 @@ class LotteryDataExporterStreamlit:
                 success1 = self.fetch_play_methods_from_db()
                 success2 = self.fetch_regions_from_db()
                 # 同时刷新数据更新日期
-                st.session_state.data_update_date = self.get_latest_redeem_date()
+                latest_date = self.get_latest_redeem_date()
+                if latest_date:
+                    st.session_state.data_update_date = latest_date
+                    st.sidebar.success(f"✅ 数据已刷新，最新日期: {latest_date}")
+                else:
+                    st.session_state.data_update_date = None
+                    st.sidebar.warning("⚠️ 数据刷新成功，但未获取到最新日期")
             
             if success1 and success2:
-                st.sidebar.success("✅ 数据列表刷新成功")
+                self.log_message("数据列表刷新成功")
             else:
-                st.sidebar.error("❌ 数据刷新失败")
+                self.log_message("数据刷新失败")
         except Exception as e:
             st.sidebar.error("刷新失败，请检查系统连接")
     
@@ -310,6 +329,8 @@ class LotteryDataExporterStreamlit:
         # 显示数据更新日期（如果可用）
         if st.session_state.data_update_date:
             st.info(f"📅 当前数据更新至: **{st.session_state.data_update_date}**")
+        else:
+            st.warning("⚠️ 未获取到数据更新日期")
         
         # 使用列布局
         col1, col2 = st.columns([1, 1])
