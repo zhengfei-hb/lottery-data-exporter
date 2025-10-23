@@ -29,15 +29,20 @@ class LotteryDataExporterStreamlit:
             'connect_timeout': 10,
         }
         
-        # 列名映射 - 根据实际Excel列名调整
+        # 完整的列名映射 - 包含所有Excel列
         self.column_mapping = {
+            'serial_no': '序号',
             'region': '兑奖单位',
             'play_method': '方案名称',
+            'play_code': '方案代码',
+            'production_batch': '生产批次',
+            'ticket_serial': '彩票流水号',
             'sale_site': '售出站点',
+            'sale_time': '售出时间',
             'redeem_site': '兑奖站点',
-            'prize_level': '兑奖金额',
             'redeem_time': '兑奖时间',
-            'sale_time': '售出时间'
+            'prize_level': '等级',
+            'prize_amount': '兑奖金额'
         }
         
         # Excel实际列名顺序
@@ -47,11 +52,8 @@ class LotteryDataExporterStreamlit:
             '兑奖时间', '等级', '兑奖金额'
         ]
         
-        # 数据库表结构对应的列
-        self.db_columns = [
-            '兑奖单位', '方案名称', '售出站点', '兑奖站点', 
-            '兑奖金额', '兑奖时间', '售出时间'
-        ]
+        # 数据库表应该包含的所有列
+        self.db_columns = list(self.column_mapping.values())
         
         self.table_name = "各奖等中奖明细表"
         self.user_table = "users"
@@ -96,6 +98,127 @@ class LotteryDataExporterStreamlit:
         if 'import_preview' not in st.session_state:
             st.session_state.import_preview = None
     
+    def check_and_create_table(self):
+        """检查并创建完整的数据库表结构，添加唯一键约束"""
+        try:
+            connection = pymysql.connect(**self.db_config)
+            cursor = connection.cursor()
+            
+            # 检查表是否存在
+            cursor.execute(f"SHOW TABLES LIKE '{self.table_name}'")
+            table_exists = cursor.fetchone()
+            
+            if not table_exists:
+                # 创建包含所有字段的表，添加唯一键约束
+                create_table_sql = f"""
+                CREATE TABLE {self.table_name} (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    `序号` VARCHAR(50),
+                    `兑奖单位` VARCHAR(100),
+                    `方案名称` VARCHAR(100),
+                    `方案代码` VARCHAR(50),
+                    `生产批次` VARCHAR(50),
+                    `彩票流水号` VARCHAR(100),
+                    `售出站点` VARCHAR(100),
+                    `售出时间` DATETIME,
+                    `兑奖站点` VARCHAR(100),
+                    `兑奖时间` DATETIME,
+                    `等级` VARCHAR(50),
+                    `兑奖金额` DECIMAL(10,2),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY unique_ticket (`彩票流水号`, `方案代码`, `兑奖时间`, `兑奖金额`)
+                )
+                """
+                cursor.execute(create_table_sql)
+                self.log_message("创建了完整的数据库表结构，包含唯一键约束")
+            else:
+                # 检查表结构是否完整
+                cursor.execute(f"DESCRIBE {self.table_name}")
+                existing_columns = [column[0] for column in cursor.fetchall()]
+                
+                # 检查缺失的列
+                missing_columns = []
+                for column in self.db_columns:
+                    if column not in existing_columns:
+                        missing_columns.append(column)
+                
+                # 添加缺失的列
+                for column in missing_columns:
+                    if column in ['序号', '方案代码', '生产批次', '彩票流水号', '等级']:
+                        alter_sql = f"ALTER TABLE {self.table_name} ADD COLUMN `{column}` VARCHAR(100)"
+                    elif column in ['兑奖金额']:
+                        alter_sql = f"ALTER TABLE {self.table_name} ADD COLUMN `{column}` DECIMAL(10,2)"
+                    elif column in ['售出时间', '兑奖时间']:
+                        alter_sql = f"ALTER TABLE {self.table_name} ADD COLUMN `{column}` DATETIME"
+                    else:
+                        alter_sql = f"ALTER TABLE {self.table_name} ADD COLUMN `{column}` VARCHAR(100)"
+                    
+                    cursor.execute(alter_sql)
+                    self.log_message(f"添加了缺失的列: {column}")
+                
+                # 检查唯一键约束是否存在
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM information_schema.table_constraints 
+                    WHERE table_name = '{self.table_name}' 
+                    AND constraint_type = 'UNIQUE'
+                    AND constraint_name = 'unique_ticket'
+                """)
+                unique_key_exists = cursor.fetchone()[0] > 0
+                
+                if not unique_key_exists:
+                    # 添加唯一键约束
+                    try:
+                        cursor.execute(f"""
+                            ALTER TABLE {self.table_name} 
+                            ADD UNIQUE KEY unique_ticket (`彩票流水号`, `方案代码`, `兑奖时间`, `兑奖金额`)
+                        """)
+                        self.log_message("已添加唯一键约束用于重复数据检查")
+                    except Exception as e:
+                        self.log_message(f"添加唯一键约束失败，可能已有重复数据: {e}")
+                        # 如果添加唯一键失败，可能是表中已有重复数据
+                        # 我们可以先清理重复数据
+                        self.clean_duplicate_data(cursor)
+                        # 然后重新尝试添加唯一键
+                        try:
+                            cursor.execute(f"""
+                                ALTER TABLE {self.table_name} 
+                                ADD UNIQUE KEY unique_ticket (`彩票流水号`, `方案代码`, `兑奖时间`, `兑奖金额`)
+                            """)
+                            self.log_message("清理重复数据后成功添加唯一键约束")
+                        except Exception as e2:
+                            self.log_message(f"再次添加唯一键约束失败: {e2}")
+                
+                if missing_columns:
+                    self.log_message(f"表结构已更新，添加了 {len(missing_columns)} 个缺失列")
+            
+            connection.commit()
+            connection.close()
+            return True
+            
+        except Exception as e:
+            self.log_message(f"检查表结构失败: {str(e)}")
+            return False
+
+    def clean_duplicate_data(self, cursor):
+        """清理表中的重复数据"""
+        try:
+            # 删除完全重复的行（所有字段都相同）
+            delete_duplicates_sql = f"""
+            DELETE t1 FROM {self.table_name} t1
+            INNER JOIN {self.table_name} t2 
+            WHERE 
+                t1.id < t2.id AND
+                t1.`彩票流水号` = t2.`彩票流水号` AND
+                t1.`方案代码` = t2.`方案代码` AND
+                t1.`兑奖时间` = t2.`兑奖时间` AND
+                t1.`兑奖金额` = t2.`兑奖金额`
+            """
+            cursor.execute(delete_duplicates_sql)
+            self.log_message(f"已清理重复数据，影响行数: {cursor.rowcount}")
+            
+        except Exception as e:
+            self.log_message(f"清理重复数据失败: {e}")
+
     def get_latest_redeem_date(self):
         """从数据库获取最新的兑奖日期"""
         try:
@@ -187,7 +310,7 @@ class LotteryDataExporterStreamlit:
     
     def setup_login_ui(self):
         """设置登录界面"""
-        st.title("🎫 即开票兑奖数据导出V1.0.1")
+        st.title("🎫 即开票兑奖数据导出V1.0.1.9")
         st.markdown("---")
         
         with st.form("login_form"):
@@ -210,6 +333,8 @@ class LotteryDataExporterStreamlit:
                             st.session_state.username = username
                             st.success(f"欢迎 {username}！")
                             self.log_message(f"用户 {username} 登录成功")
+                            # 检查并创建表结构
+                            self.check_and_create_table()
                             time.sleep(1)
                             st.rerun()
                         else:
@@ -223,9 +348,9 @@ class LotteryDataExporterStreamlit:
         with col1:
             # 显示标题和数据更新日期
             if st.session_state.data_update_date:
-                st.title(f"🎫 即开票兑奖数据导出V1.0.1 (数据更新至: {st.session_state.data_update_date})")
+                st.title(f"🎫 即开票兑奖数据导出V1.0.1.9 (数据更新至: {st.session_state.data_update_date})")
             else:
-                st.title("🎫 即开票兑奖数据导出V1.0.1")
+                st.title("🎫 即开票兑奖数据导出V1.0.1.9")
         with col2:
             st.write(f"**欢迎, {st.session_state.username}**")
         with col3:
@@ -640,7 +765,7 @@ class LotteryDataExporterStreamlit:
                         # 站点关系分布
                         if analysis_type == "全部":
                             site_relation_stats = analysis_data['站点关系'].value_counts()
-                            st.write("**🔗 站点关系分布**")
+                            st.write("🔗 站点关系分布")
                             for relation, count in site_relation_stats.items():
                                 st.write(f"- {relation}: {count} 条 ({count/total_records*100:.1f}%)")
                     
@@ -912,10 +1037,19 @@ class LotteryDataExporterStreamlit:
             if not self.test_db_connection():
                 return False, "数据库连接失败"
             
+            # 首先确保表结构完整（包含唯一键约束）
+            if not self.check_and_create_table():
+                return False, "数据库表结构检查失败"
+            
             # 重命名列以匹配数据库
             df_renamed = df.rename(columns=column_mapping)
             
-            # 只保留需要的列
+            # 确保包含所有需要的列
+            for column in self.db_columns:
+                if column not in df_renamed.columns:
+                    df_renamed[column] = None  # 添加缺失的列为空值
+            
+            # 只保留需要的列（按数据库列顺序）
             df_filtered = df_renamed[self.db_columns].copy()
             
             # 数据清洗
@@ -927,10 +1061,9 @@ class LotteryDataExporterStreamlit:
             
             # 批量插入数据
             imported_count = 0
-            skipped_count = 0
             
             if skip_duplicates:
-                # 使用批量插入 + ON DUPLICATE KEY UPDATE 或 INSERT IGNORE
+                # 使用 INSERT IGNORE 跳过重复记录
                 imported_count = self.batch_insert_with_duplicate_check(cursor, df_filtered)
             else:
                 # 直接批量插入
@@ -939,9 +1072,7 @@ class LotteryDataExporterStreamlit:
             connection.commit()
             connection.close()
             
-            message = f"导入完成！成功导入 {imported_count} 条记录"
-            if skipped_count > 0:
-                message += f"，跳过 {skipped_count} 条重复记录"
+            message = f"导入完成！成功导入 {imported_count} 条记录，跳过 {len(df_filtered) - imported_count} 条重复记录"
             
             return True, message
             
@@ -984,9 +1115,9 @@ class LotteryDataExporterStreamlit:
             raise Exception(f"批量插入失败: {str(e)}")
     
     def batch_insert_with_duplicate_check(self, cursor, df):
-        """批量插入并检查重复数据"""
+        """批量插入并检查重复数据 - 改进版本"""
         try:
-            # 使用 INSERT IGNORE 跳过重复记录
+            # 方法1: 使用 INSERT IGNORE（需要唯一键约束）
             placeholders = ', '.join(['%s'] * len(self.db_columns))
             insert_sql = f"INSERT IGNORE INTO {self.table_name} ({', '.join(self.db_columns)}) VALUES ({placeholders})"
             
@@ -995,12 +1126,60 @@ class LotteryDataExporterStreamlit:
             
             # 批量插入
             cursor.executemany(insert_sql, data_tuples)
+            inserted_count = cursor.rowcount
             
-            return cursor.rowcount
+            self.log_message(f"尝试插入 {len(data_tuples)} 条记录，成功插入 {inserted_count} 条，跳过 {len(data_tuples) - inserted_count} 条重复记录")
+            
+            return inserted_count
             
         except Exception as e:
-            raise Exception(f"批量插入失败: {str(e)}")
+            # 如果 INSERT IGNORE 失败，回退到逐条插入并检查
+            self.log_message(f"批量插入失败，回退到逐条插入: {str(e)}")
+            return self.insert_one_by_one_with_check(cursor, df)
     
+    def insert_one_by_one_with_check(self, cursor, df):
+        """逐条插入数据并检查重复"""
+        inserted_count = 0
+        
+        for _, row in df.iterrows():
+            try:
+                # 构建检查重复的查询
+                check_duplicate_sql = f"""
+                SELECT COUNT(*) FROM {self.table_name} 
+                WHERE `彩票流水号` = %s 
+                AND `方案代码` = %s 
+                AND `兑奖时间` = %s 
+                AND `兑奖金额` = %s
+                """
+                
+                # 获取关键字段值
+                ticket_serial = row.get('彩票流水号', '')
+                play_code = row.get('方案代码', '')
+                redeem_time = row.get('兑奖时间')
+                prize_amount = row.get('兑奖金额', 0)
+                
+                # 检查是否存在重复记录
+                cursor.execute(check_duplicate_sql, (ticket_serial, play_code, redeem_time, prize_amount))
+                duplicate_count = cursor.fetchone()[0]
+                
+                if duplicate_count == 0:
+                    # 没有重复，插入数据
+                    placeholders = ', '.join(['%s'] * len(self.db_columns))
+                    insert_sql = f"INSERT INTO {self.table_name} ({', '.join(self.db_columns)}) VALUES ({placeholders})"
+                    
+                    data_tuple = tuple(row[col] for col in self.db_columns)
+                    cursor.execute(insert_sql, data_tuple)
+                    inserted_count += 1
+                else:
+                    self.log_message(f"跳过重复记录: 流水号={ticket_serial}, 方案代码={play_code}")
+                    
+            except Exception as e:
+                self.log_message(f"插入单条记录失败: {e}")
+                continue
+        
+        self.log_message(f"逐条插入完成: 成功插入 {inserted_count} 条，跳过 {len(df) - inserted_count} 条重复记录")
+        return inserted_count
+
     def analyze_site_data(self):
         """分析售出站点与兑奖站点数据"""
         try:
@@ -1021,7 +1200,7 @@ class LotteryDataExporterStreamlit:
             sale_site_col = self.column_mapping['sale_site']
             redeem_site_col = self.column_mapping['redeem_site']
             region_col = self.column_mapping['region']
-            prize_level_col = self.column_mapping['prize_level']
+            prize_level_col = self.column_mapping['prize_amount']  # 注意这里改为 prize_amount
             
             # 创建分析数据副本
             analysis_data = st.session_state.preview_data.copy()
@@ -1256,7 +1435,7 @@ class LotteryDataExporterStreamlit:
         sale_site_col = self.column_mapping['sale_site']
         redeem_site_col = self.column_mapping['redeem_site']
         play_method_col = self.column_mapping['play_method']
-        prize_level_col = self.column_mapping['prize_level']
+        prize_level_col = self.column_mapping['prize_amount']  # 注意这里改为 prize_amount
         redeem_time_col = self.column_mapping['redeem_time']
         sale_time_col = self.column_mapping['sale_time']
         
