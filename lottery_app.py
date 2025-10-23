@@ -97,6 +97,26 @@ class LotteryDataExporterStreamlit:
             st.session_state.import_data = None
         if 'import_preview' not in st.session_state:
             st.session_state.import_preview = None
+        
+        # 初始化时间相关的 session state
+        if 'use_redeem_time' not in st.session_state:
+            st.session_state.use_redeem_time = False
+        if 'use_sale_time' not in st.session_state:
+            st.session_state.use_sale_time = False
+        if 'redeem_start' not in st.session_state:
+            st.session_state.redeem_start = datetime(2025, 1, 1).date()
+        if 'redeem_end' not in st.session_state:
+            st.session_state.redeem_end = datetime(2025, 12, 31).date()
+        if 'sale_start' not in st.session_state:
+            st.session_state.sale_start = datetime(2025, 1, 1).date()
+        if 'sale_end' not in st.session_state:
+            st.session_state.sale_end = datetime(2025, 12, 31).date()
+        if 'region_select' not in st.session_state:
+            st.session_state.region_select = ""
+        if 'redeem_site' not in st.session_state:
+            st.session_state.redeem_site = ""
+        if 'method_select' not in st.session_state:
+            st.session_state.method_select = ""
     
     def check_and_create_table(self):
         """检查并创建完整的数据库表结构，添加唯一键约束"""
@@ -310,7 +330,7 @@ class LotteryDataExporterStreamlit:
     
     def setup_login_ui(self):
         """设置登录界面"""
-        st.title("🎫 即开票兑奖数据导出V1.0.1.9")
+        st.title("🎫 即开票兑奖数据导出V1.0.1.6")
         st.markdown("---")
         
         with st.form("login_form"):
@@ -348,9 +368,9 @@ class LotteryDataExporterStreamlit:
         with col1:
             # 显示标题和数据更新日期
             if st.session_state.data_update_date:
-                st.title(f"🎫 即开票兑奖数据导出V1.0.1.9 (数据更新至: {st.session_state.data_update_date})")
+                st.title(f"🎫 即开票兑奖数据导出V1.0.1.6 (数据更新至: {st.session_state.data_update_date})")
             else:
-                st.title("🎫 即开票兑奖数据导出V1.0.1.9")
+                st.title("🎫 即开票兑奖数据导出V1.0.1.6")
         with col2:
             st.write(f"**欢迎, {st.session_state.username}**")
         with col3:
@@ -601,13 +621,13 @@ class LotteryDataExporterStreamlit:
                 with redeem_col1:
                     redeem_start = st.date_input(
                         "兑奖开始时间", 
-                        value=datetime(2025, 1, 1),
+                        value=st.session_state.redeem_start,
                         key="redeem_start"
                     )
                 with redeem_col2:
                     redeem_end = st.date_input(
                         "兑奖结束时间", 
-                        value=datetime(2025, 12, 31),
+                        value=st.session_state.redeem_end,
                         key="redeem_end"
                     )
             
@@ -616,13 +636,13 @@ class LotteryDataExporterStreamlit:
                 with sale_col1:
                     sale_start = st.date_input(
                         "销售开始时间", 
-                        value=datetime(2025, 1, 1),
+                        value=st.session_state.sale_start,
                         key="sale_start"
                     )
                 with sale_col2:
                     sale_end = st.date_input(
                         "销售结束时间", 
-                        value=datetime(2025, 12, 31),
+                        value=st.session_state.sale_end,
                         key="sale_end"
                     )
             
@@ -630,19 +650,19 @@ class LotteryDataExporterStreamlit:
             st.write("**📅 快速时间设置**")
             time_buttons_cols = st.columns(5)
             with time_buttons_cols[0]:
-                if st.button("今天", use_container_width=True):
+                if st.button("今天", use_container_width=True, key="today_btn"):
                     self.set_today()
             with time_buttons_cols[1]:
-                if st.button("最近7天", use_container_width=True):
+                if st.button("最近7天", use_container_width=True, key="last7_btn"):
                     self.set_last_7_days()
             with time_buttons_cols[2]:
-                if st.button("最近30天", use_container_width=True):
+                if st.button("最近30天", use_container_width=True, key="last30_btn"):
                     self.set_last_30_days()
             with time_buttons_cols[3]:
-                if st.button("本月", use_container_width=True):
+                if st.button("本月", use_container_width=True, key="this_month_btn"):
                     self.set_this_month()
             with time_buttons_cols[4]:
-                if st.button("上个月", use_container_width=True):
+                if st.button("上个月", use_container_width=True, key="last_month_btn"):
                     self.set_last_month()
         
         # 操作按钮
@@ -650,23 +670,23 @@ class LotteryDataExporterStreamlit:
         action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns(5)
         
         with action_col1:
-            if st.button("🚀 预览数据", use_container_width=True, type="primary"):
+            if st.button("🚀 预览数据", use_container_width=True, type="primary", key="preview_btn"):
                 self.preview_data_func()
         
         with action_col2:
-            if st.button("🏪 站点分析", use_container_width=True):
+            if st.button("🏪 站点分析", use_container_width=True, key="analysis_btn"):
                 self.analyze_site_data()
         
         with action_col3:
-            if st.button("💾 导出数据", use_container_width=True):
+            if st.button("💾 导出数据", use_container_width=True, key="export_btn"):
                 self.export_data()
         
         with action_col4:
-            if st.button("🔄 重置条件", use_container_width=True):
+            if st.button("🔄 重置条件", use_container_width=True, key="reset_btn"):
                 self.clear_filter_conditions()
         
         with action_col5:
-            if st.button("📊 查看统计", use_container_width=True):
+            if st.button("📊 查看统计", use_container_width=True, key="stats_btn"):
                 self.show_statistics()
     
     def setup_preview_ui(self):
@@ -684,7 +704,7 @@ class LotteryDataExporterStreamlit:
                 with col2:
                     show_all = st.checkbox("显示所有列")
                 with col3:
-                    if st.button("刷新预览"):
+                    if st.button("刷新预览", key="refresh_preview"):
                         st.rerun()
                 
                 # 显示数据
@@ -719,7 +739,7 @@ class LotteryDataExporterStreamlit:
                         horizontal=True
                     )
                 with col2:
-                    if st.button("🔄 刷新分析"):
+                    if st.button("🔄 刷新分析", key="refresh_analysis"):
                         self.analyze_site_data()
                 
                 # 筛选数据
@@ -787,10 +807,10 @@ class LotteryDataExporterStreamlit:
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("📊 导出分析数据", use_container_width=True):
+                        if st.button("📊 导出分析数据", use_container_width=True, key="export_analysis"):
                             self.export_analysis_data(analysis_data, export_filename)
                     with col2:
-                        if st.button("📈 导出统计报表", use_container_width=True):
+                        if st.button("📈 导出统计报表", use_container_width=True, key="export_stats"):
                             self.export_statistics_report(region_stats, export_filename)
                 
                 else:
@@ -834,10 +854,10 @@ class LotteryDataExporterStreamlit:
                 st.subheader("导出操作")
                 
                 if export_format == "Excel":
-                    if st.button("📥 下载 Excel 文件", use_container_width=True, type="primary"):
+                    if st.button("📥 下载 Excel 文件", use_container_width=True, type="primary", key="download_excel"):
                         self.download_excel(filename, include_index)
                 else:
-                    if st.button("📥 下载 CSV 文件", use_container_width=True, type="primary"):
+                    if st.button("📥 下载 CSV 文件", use_container_width=True, type="primary", key="download_csv"):
                         self.download_csv(filename, encoding)
                 
                 # 导出统计信息
@@ -942,7 +962,7 @@ class LotteryDataExporterStreamlit:
                 # 执行导入
                 st.subheader("🚀 执行导入")
                 
-                if st.button("📤 开始导入数据", type="primary", use_container_width=True):
+                if st.button("📤 开始导入数据", type="primary", use_container_width=True, key="import_btn"):
                     if len(missing_columns) > 0:
                         st.error("❌ 存在未匹配的列，无法导入数据")
                     else:
@@ -1018,7 +1038,7 @@ class LotteryDataExporterStreamlit:
         with col1:
             st.write("**最近操作记录:**")
         with col2:
-            if st.button("清空日志", use_container_width=True):
+            if st.button("清空日志", use_container_width=True, key="clear_logs"):
                 st.session_state.log_messages.clear()
                 st.rerun()
         
