@@ -47,6 +47,12 @@ class LotteryDataExporterStreamlit:
             '兑奖时间', '等级', '兑奖金额'
         ]
         
+        # 数据库表结构对应的列
+        self.db_columns = [
+            '兑奖单位', '方案名称', '售出站点', '兑奖站点', 
+            '兑奖金额', '兑奖时间', '售出时间'
+        ]
+        
         self.table_name = "各奖等中奖明细表"
         self.user_table = "users"
         
@@ -901,7 +907,7 @@ class LotteryDataExporterStreamlit:
                 st.info("暂无日志记录")
     
     def import_to_database(self, df, skip_duplicates, column_mapping):
-        """将数据导入到数据库"""
+        """将数据导入到数据库 - 使用批量插入优化性能"""
         try:
             if not self.test_db_connection():
                 return False, "数据库连接失败"
@@ -909,68 +915,26 @@ class LotteryDataExporterStreamlit:
             # 重命名列以匹配数据库
             df_renamed = df.rename(columns=column_mapping)
             
+            # 只保留需要的列
+            df_filtered = df_renamed[self.db_columns].copy()
+            
+            # 数据清洗
+            df_filtered = self.clean_import_data(df_filtered)
+            
             # 创建数据库连接
             connection = pymysql.connect(**self.db_config)
             cursor = connection.cursor()
             
-            # 准备插入语句 - 只插入需要的列
-            db_columns = list(self.column_mapping.values())
-            placeholders = ', '.join(['%s'] * len(db_columns))
-            insert_sql = f"INSERT INTO {self.table_name} ({', '.join(db_columns)}) VALUES ({placeholders})"
-            
-            # 处理重复数据
+            # 批量插入数据
             imported_count = 0
             skipped_count = 0
-            error_count = 0
             
-            for index, row in df_renamed.iterrows():
-                try:
-                    # 构建数据行，只包含需要的列
-                    row_data = []
-                    for col in db_columns:
-                        if col in row:
-                            # 处理NaN值
-                            if pd.isna(row[col]):
-                                row_data.append(None)
-                            else:
-                                row_data.append(row[col])
-                        else:
-                            row_data.append(None)
-                    
-                    # 检查重复数据（如果启用）
-                    if skip_duplicates:
-                        # 简化重复检查，检查兑奖时间和金额
-                        check_sql = f"""
-                        SELECT COUNT(*) FROM {self.table_name} 
-                        WHERE {self.column_mapping['redeem_time']} = %s 
-                        AND {self.column_mapping['prize_level']} = %s
-                        AND {self.column_mapping['sale_site']} = %s
-                        """
-                        check_params = (
-                            row_data[db_columns.index(self.column_mapping['redeem_time'])],
-                            row_data[db_columns.index(self.column_mapping['prize_level'])],
-                            row_data[db_columns.index(self.column_mapping['sale_site'])]
-                        )
-                        
-                        cursor.execute(check_sql, check_params)
-                        duplicate_count = cursor.fetchone()[0]
-                        
-                        if duplicate_count > 0:
-                            skipped_count += 1
-                            continue
-                    
-                    # 插入数据
-                    cursor.execute(insert_sql, row_data)
-                    imported_count += 1
-                    
-                    # 每100条提交一次，避免事务过大
-                    if imported_count % 100 == 0:
-                        connection.commit()
-                    
-                except Exception as e:
-                    error_count += 1
-                    self.log_message(f"插入第{index+1}行数据时出错: {str(e)}")
-                    continue
+            if skip_duplicates:
+                # 使用批量插入 + ON DUPLICATE KEY UPDATE 或 INSERT IGNORE
+                imported_count = self.batch_insert_with_duplicate_check(cursor, df_filtered)
+            else:
+                # 直接批量插入
+                imported_count = self.batch_insert(cursor, df_filtered)
             
             connection.commit()
             connection.close()
@@ -978,13 +942,64 @@ class LotteryDataExporterStreamlit:
             message = f"导入完成！成功导入 {imported_count} 条记录"
             if skipped_count > 0:
                 message += f"，跳过 {skipped_count} 条重复记录"
-            if error_count > 0:
-                message += f"，{error_count} 条记录导入失败"
             
             return True, message
             
         except Exception as e:
             return False, f"导入过程中发生错误: {str(e)}"
+    
+    def clean_import_data(self, df):
+        """清洗导入数据"""
+        # 处理空值
+        df = df.fillna('')
+        
+        # 确保数据类型正确
+        if '兑奖金额' in df.columns:
+            df['兑奖金额'] = pd.to_numeric(df['兑奖金额'], errors='coerce').fillna(0)
+        
+        # 处理日期时间字段
+        date_columns = ['兑奖时间', '售出时间']
+        for col in date_columns:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce')
+        
+        return df
+    
+    def batch_insert(self, cursor, df):
+        """批量插入数据"""
+        try:
+            # 准备插入语句
+            placeholders = ', '.join(['%s'] * len(self.db_columns))
+            insert_sql = f"INSERT INTO {self.table_name} ({', '.join(self.db_columns)}) VALUES ({placeholders})"
+            
+            # 转换为元组列表
+            data_tuples = [tuple(row) for row in df.itertuples(index=False)]
+            
+            # 批量插入
+            cursor.executemany(insert_sql, data_tuples)
+            
+            return len(data_tuples)
+            
+        except Exception as e:
+            raise Exception(f"批量插入失败: {str(e)}")
+    
+    def batch_insert_with_duplicate_check(self, cursor, df):
+        """批量插入并检查重复数据"""
+        try:
+            # 使用 INSERT IGNORE 跳过重复记录
+            placeholders = ', '.join(['%s'] * len(self.db_columns))
+            insert_sql = f"INSERT IGNORE INTO {self.table_name} ({', '.join(self.db_columns)}) VALUES ({placeholders})"
+            
+            # 转换为元组列表
+            data_tuples = [tuple(row) for row in df.itertuples(index=False)]
+            
+            # 批量插入
+            cursor.executemany(insert_sql, data_tuples)
+            
+            return cursor.rowcount
+            
+        except Exception as e:
+            raise Exception(f"批量插入失败: {str(e)}")
     
     def analyze_site_data(self):
         """分析售出站点与兑奖站点数据"""
