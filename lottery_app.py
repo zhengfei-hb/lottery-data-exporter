@@ -29,7 +29,7 @@ class LotteryDataExporterStreamlit:
             'connect_timeout': 10,
         }
         
-        # 列名映射
+        # 列名映射 - 根据实际Excel列名调整
         self.column_mapping = {
             'region': '兑奖单位',
             'play_method': '方案名称',
@@ -39,6 +39,13 @@ class LotteryDataExporterStreamlit:
             'redeem_time': '兑奖时间',
             'sale_time': '售出时间'
         }
+        
+        # Excel实际列名顺序
+        self.excel_columns = [
+            '序号', '兑奖单位', '方案名称', '方案代码', '生产批次', 
+            '彩票流水号', '售出站点', '售出时间', '兑奖站点', 
+            '兑奖时间', '等级', '兑奖金额'
+        ]
         
         self.table_name = "各奖等中奖明细表"
         self.user_table = "users"
@@ -721,6 +728,7 @@ class LotteryDataExporterStreamlit:
         st.info("""
         **功能说明：**
         - 支持导入Excel格式的兑奖明细数据
+        - Excel文件前4行为标题行，从第5行开始为数据
         - 系统会自动匹配列名并导入到数据库
         - 支持重复数据检测和跳过
         - 导入前会显示数据预览
@@ -731,20 +739,20 @@ class LotteryDataExporterStreamlit:
         uploaded_file = st.file_uploader(
             "选择Excel文件",
             type=['xlsx', 'xls'],
-            help="请上传包含兑奖明细数据的Excel文件"
+            help="请上传包含兑奖明细数据的Excel文件（前4行为标题行）"
         )
         
         if uploaded_file is not None:
             try:
-                # 读取Excel文件
-                with st.spinner("正在读取Excel文件..."):
-                    df = pd.read_excel(uploaded_file)
+                # 读取Excel文件，跳过前4行标题行
+                with st.spinner("正在读取Excel文件（跳过前4行标题）..."):
+                    df = pd.read_excel(uploaded_file, skiprows=4)
                     st.session_state.import_data = df
                 
                 st.success(f"✅ 成功读取Excel文件，共 {len(df)} 行 {len(df.columns)} 列")
                 
                 # 显示数据预览
-                st.subheader("👀 数据预览")
+                st.subheader("👀 数据预览（从第5行开始的数据）")
                 st.dataframe(df.head(10), use_container_width=True)
                 
                 # 数据检查和映射
@@ -789,25 +797,16 @@ class LotteryDataExporterStreamlit:
                     st.warning("**⚠️ 未匹配的列:**")
                     for col in missing_columns:
                         st.write(f"- {col}")
-                    st.info("请确保Excel文件中包含必要的列名，或手动指定列映射关系")
+                    st.info("请确保Excel文件中包含必要的列名")
                 
                 # 导入选项
                 st.subheader("⚙️ 导入选项")
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    import_mode = st.radio(
-                        "导入模式",
-                        ["追加数据", "清空后导入"],
-                        help="选择数据导入方式"
-                    )
-                
-                with col2:
-                    skip_duplicates = st.checkbox(
-                        "跳过重复数据",
-                        value=True,
-                        help="根据关键字段自动跳过重复记录"
-                    )
+                skip_duplicates = st.checkbox(
+                    "跳过重复数据",
+                    value=True,
+                    help="根据关键字段自动跳过重复记录"
+                )
                 
                 # 执行导入
                 st.subheader("🚀 执行导入")
@@ -818,7 +817,7 @@ class LotteryDataExporterStreamlit:
                     else:
                         with st.spinner("正在导入数据到数据库..."):
                             success, message = self.import_to_database(
-                                df, import_mode, skip_duplicates, matched_columns
+                                df, skip_duplicates, matched_columns
                             )
                         
                         if success:
@@ -841,17 +840,36 @@ class LotteryDataExporterStreamlit:
         else:
             st.info("ℹ️ 请上传Excel文件开始导入流程")
             
-            # 显示模板下载
-            st.subheader("📋 下载模板")
-            st.write("如需模板文件，请使用以下空白模板：")
+            # 显示模板说明
+            st.subheader("📋 文件格式说明")
+            st.write("**Excel文件格式要求：**")
+            st.write("1. 前4行为标题行")
+            st.write("2. 从第5行开始为数据行")
+            st.write("3. 列顺序应为：")
+            for i, col in enumerate(self.excel_columns, 1):
+                st.write(f"   {i}. {col}")
             
             # 创建模板DataFrame
-            template_df = pd.DataFrame(columns=list(self.column_mapping.values()))
+            template_df = pd.DataFrame(columns=self.excel_columns)
             
             # 提供模板下载
             template_buffer = io.BytesIO()
             with pd.ExcelWriter(template_buffer, engine='openpyxl') as writer:
-                template_df.to_excel(writer, index=False, sheet_name='兑奖明细模板')
+                # 写入标题行
+                title_df = pd.DataFrame([["即开票兑奖明细数据"] * len(self.excel_columns)], columns=self.excel_columns)
+                title_df.to_excel(writer, index=False, header=False, startrow=0)
+                
+                # 写入空行作为标题分隔
+                empty_df = pd.DataFrame([[""] * len(self.excel_columns)], columns=self.excel_columns)
+                empty_df.to_excel(writer, index=False, header=False, startrow=1)
+                empty_df.to_excel(writer, index=False, header=False, startrow=2)
+                
+                # 写入列标题
+                header_df = pd.DataFrame([self.excel_columns], columns=self.excel_columns)
+                header_df.to_excel(writer, index=False, header=False, startrow=3)
+                
+                # 写入数据模板
+                template_df.to_excel(writer, index=False, startrow=4)
             
             st.download_button(
                 label="📥 下载Excel模板",
@@ -882,7 +900,7 @@ class LotteryDataExporterStreamlit:
             else:
                 st.info("暂无日志记录")
     
-    def import_to_database(self, df, import_mode, skip_duplicates, column_mapping):
+    def import_to_database(self, df, skip_duplicates, column_mapping):
         """将数据导入到数据库"""
         try:
             if not self.test_db_connection():
@@ -895,15 +913,10 @@ class LotteryDataExporterStreamlit:
             connection = pymysql.connect(**self.db_config)
             cursor = connection.cursor()
             
-            # 处理导入模式
-            if import_mode == "清空后导入":
-                cursor.execute(f"TRUNCATE TABLE {self.table_name}")
-                self.log_message("已清空原有数据")
-            
-            # 准备插入语句
-            columns = list(self.column_mapping.values())
-            placeholders = ', '.join(['%s'] * len(columns))
-            insert_sql = f"INSERT INTO {self.table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+            # 准备插入语句 - 只插入需要的列
+            db_columns = list(self.column_mapping.values())
+            placeholders = ', '.join(['%s'] * len(db_columns))
+            insert_sql = f"INSERT INTO {self.table_name} ({', '.join(db_columns)}) VALUES ({placeholders})"
             
             # 处理重复数据
             imported_count = 0
@@ -912,9 +925,9 @@ class LotteryDataExporterStreamlit:
             
             for index, row in df_renamed.iterrows():
                 try:
-                    # 构建数据行
+                    # 构建数据行，只包含需要的列
                     row_data = []
-                    for col in columns:
+                    for col in db_columns:
                         if col in row:
                             # 处理NaN值
                             if pd.isna(row[col]):
@@ -931,10 +944,12 @@ class LotteryDataExporterStreamlit:
                         SELECT COUNT(*) FROM {self.table_name} 
                         WHERE {self.column_mapping['redeem_time']} = %s 
                         AND {self.column_mapping['prize_level']} = %s
+                        AND {self.column_mapping['sale_site']} = %s
                         """
                         check_params = (
-                            row_data[columns.index(self.column_mapping['redeem_time'])],
-                            row_data[columns.index(self.column_mapping['prize_level'])]
+                            row_data[db_columns.index(self.column_mapping['redeem_time'])],
+                            row_data[db_columns.index(self.column_mapping['prize_level'])],
+                            row_data[db_columns.index(self.column_mapping['sale_site'])]
                         )
                         
                         cursor.execute(check_sql, check_params)
