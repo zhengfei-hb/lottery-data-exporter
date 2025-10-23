@@ -75,6 +75,8 @@ class LotteryDataExporterStreamlit:
             st.session_state.initial_load_attempted = False
         if 'data_update_date' not in st.session_state:
             st.session_state.data_update_date = None
+        if 'site_analysis_data' not in st.session_state:
+            st.session_state.site_analysis_data = None
     
     def get_latest_redeem_date(self):
         """从数据库获取最新的兑奖日期"""
@@ -275,7 +277,7 @@ class LotteryDataExporterStreamlit:
                 st.metric("查询结果", len(st.session_state.preview_data))
         
         # 主内容区 - 使用标签页组织
-        tab1, tab2, tab3, tab4 = st.tabs(["🔍 数据筛选", "📋 数据预览", "💾 数据导出", "📝 操作日志"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 数据筛选", "📋 数据预览", "🏪 站点分析", "💾 数据导出", "📝 操作日志"])
         
         with tab1:
             self.setup_filter_ui()
@@ -284,9 +286,12 @@ class LotteryDataExporterStreamlit:
             self.setup_preview_ui()
         
         with tab3:
-            self.setup_export_ui()
+            self.setup_site_analysis_ui()
         
         with tab4:
+            self.setup_export_ui()
+        
+        with tab5:
             self.setup_log_ui()
     
     def refresh_data_lists(self):
@@ -496,21 +501,25 @@ class LotteryDataExporterStreamlit:
         
         # 操作按钮
         st.markdown("---")
-        action_col1, action_col2, action_col3, action_col4 = st.columns(4)
+        action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns(5)
         
         with action_col1:
             if st.button("🚀 预览数据", use_container_width=True, type="primary"):
                 self.preview_data_func()
         
         with action_col2:
+            if st.button("🏪 站点分析", use_container_width=True):
+                self.analyze_site_data()
+        
+        with action_col3:
             if st.button("💾 导出数据", use_container_width=True):
                 self.export_data()
         
-        with action_col3:
+        with action_col4:
             if st.button("🔄 重置条件", use_container_width=True):
                 self.clear_filter_conditions()
         
-        with action_col4:
+        with action_col5:
             if st.button("📊 查看统计", use_container_width=True):
                 self.show_statistics()
     
@@ -546,6 +555,106 @@ class LotteryDataExporterStreamlit:
                 st.info("请调整筛选条件后重新查询")
         else:
             st.info("ℹ️ 请先在「数据筛选」标签页中设置条件并点击「预览数据」")
+    
+    def setup_site_analysis_ui(self):
+        """设置站点分析界面"""
+        st.header("🏪 售出站点与兑奖站点分析")
+        
+        if st.session_state.site_analysis_data is not None:
+            if not st.session_state.site_analysis_data.empty:
+                st.success(f"✅ 分析数据已生成，共 {len(st.session_state.site_analysis_data)} 条记录")
+                
+                # 分析选项
+                col1, col2 = st.columns(2)
+                with col1:
+                    analysis_type = st.radio(
+                        "分析类型",
+                        ["全部", "站点一致", "站点不一致"],
+                        horizontal=True
+                    )
+                with col2:
+                    if st.button("🔄 刷新分析"):
+                        self.analyze_site_data()
+                
+                # 筛选数据
+                if analysis_type == "站点一致":
+                    analysis_data = st.session_state.site_analysis_data[
+                        st.session_state.site_analysis_data['站点关系'] == '一致'
+                    ]
+                elif analysis_type == "站点不一致":
+                    analysis_data = st.session_state.site_analysis_data[
+                        st.session_state.site_analysis_data['站点关系'] == '不一致'
+                    ]
+                else:
+                    analysis_data = st.session_state.site_analysis_data
+                
+                st.subheader(f"📊 {analysis_type}情况统计")
+                
+                # 统计信息
+                if not analysis_data.empty:
+                    # 按区域统计
+                    region_stats = analysis_data.groupby(['兑奖单位', '站点关系']).agg({
+                        '兑奖金额': ['count', 'sum']
+                    }).round(2)
+                    region_stats.columns = ['记录数', '总金额']
+                    region_stats = region_stats.reset_index()
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**📈 按区域统计**")
+                        st.dataframe(region_stats, use_container_width=True)
+                    
+                    with col2:
+                        st.write("**🎯 关键指标**")
+                        
+                        total_records = len(analysis_data)
+                        total_amount = analysis_data['兑奖金额'].sum()
+                        avg_amount = analysis_data['兑奖金额'].mean()
+                        
+                        st.metric("总记录数", f"{total_records:,}")
+                        st.metric("总兑奖金额", f"¥{total_amount:,.2f}")
+                        st.metric("平均兑奖金额", f"¥{avg_amount:,.2f}")
+                        
+                        # 站点关系分布
+                        if analysis_type == "全部":
+                            site_relation_stats = analysis_data['站点关系'].value_counts()
+                            st.write("**🔗 站点关系分布**")
+                            for relation, count in site_relation_stats.items():
+                                st.write(f"- {relation}: {count} 条 ({count/total_records*100:.1f}%)")
+                    
+                    # 详细数据展示
+                    st.subheader("📋 详细数据")
+                    
+                    show_count = st.slider("显示记录数量", 10, 1000, 100, 10, key="analysis_show_count")
+                    display_analysis_data = analysis_data.head(show_count)
+                    
+                    st.dataframe(display_analysis_data, use_container_width=True)
+                    
+                    # 导出分析结果
+                    st.subheader("💾 导出分析结果")
+                    export_filename = st.text_input(
+                        "导出文件名",
+                        value=f"site_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                        key="analysis_export_filename"
+                    )
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("📊 导出分析数据", use_container_width=True):
+                            self.export_analysis_data(analysis_data, export_filename)
+                    with col2:
+                        if st.button("📈 导出统计报表", use_container_width=True):
+                            self.export_statistics_report(region_stats, export_filename)
+                
+                else:
+                    st.warning(f"⚠️ 没有找到{analysis_type}的数据")
+            
+            else:
+                st.warning("⚠️ 没有找到符合条件的数据")
+                st.info("请调整筛选条件后重新分析")
+        else:
+            st.info("ℹ️ 请先在「数据筛选」标签页中设置条件并点击「站点分析」")
     
     def setup_export_ui(self):
         """设置数据导出界面"""
@@ -618,6 +727,118 @@ class LotteryDataExporterStreamlit:
                     st.text(log_entry)
             else:
                 st.info("暂无日志记录")
+    
+    def analyze_site_data(self):
+        """分析售出站点与兑奖站点数据"""
+        try:
+            if st.session_state.preview_data is None or st.session_state.preview_data.empty:
+                st.warning("⚠️ 请先预览数据再进行站点分析")
+                return
+            
+            self.log_message("开始分析站点数据...")
+            
+            # 显示进度
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            status_text.text("正在处理数据...")
+            progress_bar.progress(30)
+            
+            # 获取列名映射
+            sale_site_col = self.column_mapping['sale_site']
+            redeem_site_col = self.column_mapping['redeem_site']
+            region_col = self.column_mapping['region']
+            prize_level_col = self.column_mapping['prize_level']
+            
+            # 创建分析数据副本
+            analysis_data = st.session_state.preview_data.copy()
+            
+            status_text.text("分析站点关系...")
+            progress_bar.progress(60)
+            
+            # 分析站点关系
+            analysis_data['站点关系'] = analysis_data.apply(
+                lambda row: '一致' if str(row[sale_site_col]) == str(row[redeem_site_col]) else '不一致', 
+                axis=1
+            )
+            
+            # 重命名列以便显示
+            analysis_data = analysis_data.rename(columns={
+                region_col: '兑奖单位',
+                sale_site_col: '售出站点',
+                redeem_site_col: '兑奖站点',
+                prize_level_col: '兑奖金额'
+            })
+            
+            # 选择需要显示的列
+            display_columns = ['兑奖单位', '售出站点', '兑奖站点', '站点关系', '兑奖金额']
+            # 添加其他可能需要的列
+            for col in ['方案名称', '兑奖时间', '售出时间']:
+                if col in analysis_data.columns:
+                    display_columns.append(col)
+            
+            analysis_data = analysis_data[display_columns]
+            
+            status_text.text("完成分析...")
+            progress_bar.progress(90)
+            
+            st.session_state.site_analysis_data = analysis_data
+            
+            progress_bar.progress(100)
+            status_text.text("分析完成！")
+            time.sleep(0.5)
+            status_text.empty()
+            progress_bar.empty()
+            
+            self.log_message(f"站点分析完成，共分析 {len(analysis_data)} 条记录")
+            st.success("✅ 站点分析完成！")
+            
+        except Exception as e:
+            error_msg = f"站点分析过程中发生错误: {e}"
+            st.error("站点分析过程中发生错误，请重试")
+            self.log_message(f"站点分析失败: {e}")
+    
+    def export_analysis_data(self, data, filename):
+        """导出分析数据"""
+        try:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                data.to_excel(writer, index=False, sheet_name='站点分析数据')
+            
+            st.download_button(
+                label="📥 点击下载分析数据",
+                data=buffer.getvalue(),
+                file_name=f"{filename}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="analysis_download"
+            )
+            
+            self.log_message(f"站点分析数据已准备下载: {filename}.xlsx")
+            
+        except Exception as e:
+            st.error(f"导出分析数据失败: {e}")
+            self.log_message(f"导出分析数据失败: {e}")
+    
+    def export_statistics_report(self, stats_data, filename):
+        """导出统计报表"""
+        try:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                stats_data.to_excel(writer, index=False, sheet_name='统计报表')
+            
+            st.download_button(
+                label="📥 点击下载统计报表",
+                data=buffer.getvalue(),
+                file_name=f"{filename}_stats.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="stats_download"
+            )
+            
+            self.log_message(f"统计报表已准备下载: {filename}_stats.xlsx")
+            
+        except Exception as e:
+            st.error(f"导出统计报表失败: {e}")
+            self.log_message(f"导出统计报表失败: {e}")
     
     def download_excel(self, filename, include_index=False):
         """下载Excel文件"""
