@@ -6,6 +6,7 @@ import logging
 import io
 import time
 import hashlib
+import os
 
 # 设置页面配置
 st.set_page_config(
@@ -77,6 +78,10 @@ class LotteryDataExporterStreamlit:
             st.session_state.data_update_date = None
         if 'site_analysis_data' not in st.session_state:
             st.session_state.site_analysis_data = None
+        if 'import_data' not in st.session_state:
+            st.session_state.import_data = None
+        if 'import_preview' not in st.session_state:
+            st.session_state.import_preview = None
     
     def get_latest_redeem_date(self):
         """从数据库获取最新的兑奖日期"""
@@ -277,7 +282,7 @@ class LotteryDataExporterStreamlit:
                 st.metric("查询结果", len(st.session_state.preview_data))
         
         # 主内容区 - 使用标签页组织
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 数据筛选", "📋 数据预览", "🏪 站点分析", "💾 数据导出", "📝 操作日志"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🔍 数据筛选", "📋 数据预览", "🏪 站点分析", "💾 数据导出", "📤 数据导入", "📝 操作日志"])
         
         with tab1:
             self.setup_filter_ui()
@@ -292,6 +297,9 @@ class LotteryDataExporterStreamlit:
             self.setup_export_ui()
         
         with tab5:
+            self.setup_import_ui()
+        
+        with tab6:
             self.setup_log_ui()
     
     def refresh_data_lists(self):
@@ -706,6 +714,152 @@ class LotteryDataExporterStreamlit:
             st.warning("⚠️ 没有可导出的数据")
             st.info("请先查询数据后再进行导出操作")
     
+    def setup_import_ui(self):
+        """设置数据导入界面"""
+        st.header("📤 Excel数据导入")
+        
+        st.info("""
+        **功能说明：**
+        - 支持导入Excel格式的兑奖明细数据
+        - 系统会自动匹配列名并导入到数据库
+        - 支持重复数据检测和跳过
+        - 导入前会显示数据预览
+        """)
+        
+        # 文件上传区域
+        st.subheader("📁 上传Excel文件")
+        uploaded_file = st.file_uploader(
+            "选择Excel文件",
+            type=['xlsx', 'xls'],
+            help="请上传包含兑奖明细数据的Excel文件"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # 读取Excel文件
+                with st.spinner("正在读取Excel文件..."):
+                    df = pd.read_excel(uploaded_file)
+                    st.session_state.import_data = df
+                
+                st.success(f"✅ 成功读取Excel文件，共 {len(df)} 行 {len(df.columns)} 列")
+                
+                # 显示数据预览
+                st.subheader("👀 数据预览")
+                st.dataframe(df.head(10), use_container_width=True)
+                
+                # 数据检查和映射
+                st.subheader("🔍 数据检查与列映射")
+                
+                # 显示列信息
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Excel文件列名:**")
+                    for i, col in enumerate(df.columns):
+                        st.write(f"{i+1}. {col}")
+                
+                with col2:
+                    st.write("**系统需要的列名:**")
+                    required_columns = list(self.column_mapping.values())
+                    for i, col in enumerate(required_columns):
+                        st.write(f"{i+1}. {col}")
+                
+                # 自动匹配列名
+                matched_columns = {}
+                missing_columns = []
+                
+                for sys_col in required_columns:
+                    matched = False
+                    for file_col in df.columns:
+                        if sys_col in file_col or file_col in sys_col:
+                            matched_columns[sys_col] = file_col
+                            matched = True
+                            break
+                    if not matched:
+                        missing_columns.append(sys_col)
+                
+                # 显示匹配结果
+                st.subheader("📋 列匹配结果")
+                
+                if matched_columns:
+                    st.write("**✅ 已匹配的列:**")
+                    for sys_col, file_col in matched_columns.items():
+                        st.write(f"- {sys_col} ← {file_col}")
+                
+                if missing_columns:
+                    st.warning("**⚠️ 未匹配的列:**")
+                    for col in missing_columns:
+                        st.write(f"- {col}")
+                    st.info("请确保Excel文件中包含必要的列名，或手动指定列映射关系")
+                
+                # 导入选项
+                st.subheader("⚙️ 导入选项")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    import_mode = st.radio(
+                        "导入模式",
+                        ["追加数据", "清空后导入"],
+                        help="选择数据导入方式"
+                    )
+                
+                with col2:
+                    skip_duplicates = st.checkbox(
+                        "跳过重复数据",
+                        value=True,
+                        help="根据关键字段自动跳过重复记录"
+                    )
+                
+                # 执行导入
+                st.subheader("🚀 执行导入")
+                
+                if st.button("📤 开始导入数据", type="primary", use_container_width=True):
+                    if len(missing_columns) > 0:
+                        st.error("❌ 存在未匹配的列，无法导入数据")
+                    else:
+                        with st.spinner("正在导入数据到数据库..."):
+                            success, message = self.import_to_database(
+                                df, import_mode, skip_duplicates, matched_columns
+                            )
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            self.log_message(f"数据导入成功: {message}")
+                            
+                            # 刷新数据
+                            self.refresh_data_lists()
+                            
+                            # 显示导入统计
+                            st.balloons()
+                        else:
+                            st.error(f"❌ {message}")
+                            self.log_message(f"数据导入失败: {message}")
+                
+            except Exception as e:
+                st.error(f"❌ 读取Excel文件时发生错误: {str(e)}")
+                self.log_message(f"Excel文件读取失败: {str(e)}")
+        
+        else:
+            st.info("ℹ️ 请上传Excel文件开始导入流程")
+            
+            # 显示模板下载
+            st.subheader("📋 下载模板")
+            st.write("如需模板文件，请使用以下空白模板：")
+            
+            # 创建模板DataFrame
+            template_df = pd.DataFrame(columns=list(self.column_mapping.values()))
+            
+            # 提供模板下载
+            template_buffer = io.BytesIO()
+            with pd.ExcelWriter(template_buffer, engine='openpyxl') as writer:
+                template_df.to_excel(writer, index=False, sheet_name='兑奖明细模板')
+            
+            st.download_button(
+                label="📥 下载Excel模板",
+                data=template_buffer.getvalue(),
+                file_name="兑奖明细导入模板.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    
     def setup_log_ui(self):
         """设置操作日志界面"""
         st.header("📝 操作日志")
@@ -727,6 +881,95 @@ class LotteryDataExporterStreamlit:
                     st.text(log_entry)
             else:
                 st.info("暂无日志记录")
+    
+    def import_to_database(self, df, import_mode, skip_duplicates, column_mapping):
+        """将数据导入到数据库"""
+        try:
+            if not self.test_db_connection():
+                return False, "数据库连接失败"
+            
+            # 重命名列以匹配数据库
+            df_renamed = df.rename(columns=column_mapping)
+            
+            # 创建数据库连接
+            connection = pymysql.connect(**self.db_config)
+            cursor = connection.cursor()
+            
+            # 处理导入模式
+            if import_mode == "清空后导入":
+                cursor.execute(f"TRUNCATE TABLE {self.table_name}")
+                self.log_message("已清空原有数据")
+            
+            # 准备插入语句
+            columns = list(self.column_mapping.values())
+            placeholders = ', '.join(['%s'] * len(columns))
+            insert_sql = f"INSERT INTO {self.table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+            
+            # 处理重复数据
+            imported_count = 0
+            skipped_count = 0
+            error_count = 0
+            
+            for index, row in df_renamed.iterrows():
+                try:
+                    # 构建数据行
+                    row_data = []
+                    for col in columns:
+                        if col in row:
+                            # 处理NaN值
+                            if pd.isna(row[col]):
+                                row_data.append(None)
+                            else:
+                                row_data.append(row[col])
+                        else:
+                            row_data.append(None)
+                    
+                    # 检查重复数据（如果启用）
+                    if skip_duplicates:
+                        # 简化重复检查，检查兑奖时间和金额
+                        check_sql = f"""
+                        SELECT COUNT(*) FROM {self.table_name} 
+                        WHERE {self.column_mapping['redeem_time']} = %s 
+                        AND {self.column_mapping['prize_level']} = %s
+                        """
+                        check_params = (
+                            row_data[columns.index(self.column_mapping['redeem_time'])],
+                            row_data[columns.index(self.column_mapping['prize_level'])]
+                        )
+                        
+                        cursor.execute(check_sql, check_params)
+                        duplicate_count = cursor.fetchone()[0]
+                        
+                        if duplicate_count > 0:
+                            skipped_count += 1
+                            continue
+                    
+                    # 插入数据
+                    cursor.execute(insert_sql, row_data)
+                    imported_count += 1
+                    
+                    # 每100条提交一次，避免事务过大
+                    if imported_count % 100 == 0:
+                        connection.commit()
+                    
+                except Exception as e:
+                    error_count += 1
+                    self.log_message(f"插入第{index+1}行数据时出错: {str(e)}")
+                    continue
+            
+            connection.commit()
+            connection.close()
+            
+            message = f"导入完成！成功导入 {imported_count} 条记录"
+            if skipped_count > 0:
+                message += f"，跳过 {skipped_count} 条重复记录"
+            if error_count > 0:
+                message += f"，{error_count} 条记录导入失败"
+            
+            return True, message
+            
+        except Exception as e:
+            return False, f"导入过程中发生错误: {str(e)}"
     
     def analyze_site_data(self):
         """分析售出站点与兑奖站点数据"""
